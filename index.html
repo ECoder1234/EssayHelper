@@ -3,12 +3,16 @@
 <head>
   <meta charset="UTF-8" />
   <title>AI Essay Helper</title>
-  <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
-  <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
-  <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
-  <script defer src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
-  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/docx/7.7.0/docx.umd.min.js"></script>
-  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+  <!-- Firebase SDKs - load WITHOUT defer so firebase namespace is ready -->
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+
+  <script src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/docx/7.7.0/docx.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
   <style>
     .hidden { display: none !important; }
     body {
@@ -132,6 +136,7 @@
         document.getElementById("app").classList.remove("hidden");
         document.getElementById("userEmail").textContent = currentUser.email;
         loadSavedEssays();
+        saveEssay();  // save after login if something is typed
       })
       .catch(err => console.error("Sign-in error:", err));
   }
@@ -213,16 +218,17 @@
 
   // ── AUTO-DOT JOT NOTES & SAVE ON INPUT ────────────────
   document.getElementById("jotNotes")
-    .addEventListener("input",e=>{
-      const lines = e.target.value.split("\n").map(l=>l.trim()?`• ${l.replace(/^•?\s*/,"")}`:"");
+    .addEventListener("input", e => {
       const pos = e.target.selectionStart;
+      const lines = e.target.value.split("\n").map(l => l.trim() ? `• ${l.replace(/^•?\s*/, "")}` : "");
       e.target.value = lines.join("\n");
-      e.target.selectionStart = e.target.selectionEnd = pos;
+      // Restore cursor position approximately
+      e.target.selectionStart = e.target.selectionEnd = pos + 2;
       saveEssay();
     });
-  ["essayPrompt","aiResponse"]
-    .forEach(id=>document.getElementById(id)
-      .addEventListener("input",saveEssay)
+  ["essayPrompt", "aiResponse"]
+    .forEach(id => document.getElementById(id)
+      .addEventListener("input", saveEssay)
     );
 
   // ── AI GENERATION ─────────────────────────────────────
@@ -230,69 +236,70 @@
     const p = document.getElementById("essayPrompt").value.trim();
     const j = document.getElementById("jotNotes").value.trim();
     const out = document.getElementById("aiResponse");
-    if(!p) return alert("Enter the Essay Main Idea.");
-    out.style.display="block"; out.value="Writing…";
+    if (!p) return alert("Enter the Essay Main Idea.");
+    out.style.display = "block"; out.value = "Writing…";
     try {
       const res = await fetch("https://api.openai.com/v1/chat/completions", {
-        method:"POST",
-        headers:{
-          "Content-Type":"application/json",
-          "Authorization":"Bearer YOUR_OPENAI_KEY"
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": "Bearer YOUR_OPENAI_KEY"  // <-- PUT YOUR OPENAI API KEY HERE
         },
         body: JSON.stringify({
-          model:"gpt-3.5-turbo",
-          messages:[
-            {role:"system",content:"You are a helpful essay writer."},
-            {role:"user",  content:`Main Idea:\n${p}\n\nJot Notes:\n${j}`}
+          model: "gpt-3.5-turbo",
+          messages: [
+            { role: "system", content: "You are a helpful essay writer." },
+            { role: "user", content: `Main Idea:\n${p}\n\nJot Notes:\n${j}` }
           ],
-          max_tokens:700
+          max_tokens: 700
         })
       });
       const d = await res.json();
-      out.value = d.choices?.[0]?.message?.content||"Error generating.";
+      out.value = d.choices?.[0]?.message?.content || "Error generating.";
       saveEssay();
-    } catch(err) {
-      out.value="";
-      alert("AI error: "+err.message);
+    } catch (err) {
+      out.value = "";
+      alert("AI error: " + err.message);
     }
   }
 
   // ── EXPORT ────────────────────────────────────────────
   function togglePopup(e) {
     const pop = document.getElementById("popup");
-    pop.style.display = pop.style.display==="flex"?"none":"flex";
-    pop.style.left = e.clientX+"px"; pop.style.top = e.clientY+"px";
+    pop.style.display = pop.style.display === "flex" ? "none" : "flex";
+    pop.style.left = e.clientX + "px"; pop.style.top = e.clientY + "px";
   }
   function downloadText() {
-    saveAs(new Blob([document.getElementById("aiResponse").value],{type:"text/plain"}),"essay.txt");
+    saveAs(new Blob([document.getElementById("aiResponse").value], { type: "text/plain" }), "essay.txt");
   }
   async function exportAsPDF() {
     const { jsPDF } = window.jspdf;
     const doc = new jsPDF();
     const t = document.getElementById("aiResponse").value;
-    doc.text(doc.splitTextToSize(t,180),10,20);
+    doc.text(doc.splitTextToSize(t, 180), 10, 20);
     doc.save("essay.pdf");
   }
   async function exportAsDocx() {
     const t = document.getElementById("aiResponse").value;
-    const doc = new docx.Document({sections:[{children:[new docx.Paragraph(t)]}]});
+    const doc = new docx.Document({ sections: [{ children: [new docx.Paragraph(t)] }] });
     const blob = await docx.Packer.toBlob(doc);
-    saveAs(blob,"essay.docx");
+    saveAs(blob, "essay.docx");
   }
   function copyEssay() {
     const ta = document.getElementById("aiResponse");
-    ta.select(); document.execCommand("copy");
+    ta.select();
+    document.execCommand("copy");
     alert("Copied!");
   }
-  window.addEventListener("click",e=>{
-    if(!e.target.closest("#popup") && e.target.innerText!=="Export Essay"){
-      document.getElementById("popup").style.display="none";
+  window.addEventListener("click", e => {
+    if (!e.target.closest("#popup") && e.target.innerText !== "Export Essay") {
+      document.getElementById("popup").style.display = "none";
     }
   });
 
   // ── AUTO-LOGIN ON RELOAD ──────────────────────────────
-  auth.onAuthStateChanged(u=>{
-    if(u){
+  auth.onAuthStateChanged(u => {
+    if (u) {
       currentUser = u;
       document.getElementById("auth").classList.add("hidden");
       document.getElementById("app").classList.remove("hidden");
@@ -303,10 +310,11 @@
       document.getElementById("auth").classList.remove("hidden");
       document.getElementById("app").classList.add("hidden");
       clearInputs();
-      document.getElementById("savedEssaysList").innerHTML="";
-      document.getElementById("userEmail").textContent="";
+      document.getElementById("savedEssaysList").innerHTML = "";
+      document.getElementById("userEmail").textContent = "";
     }
   });
 </script>
+
 </body>
 </html>
