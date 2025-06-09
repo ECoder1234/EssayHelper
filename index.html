@@ -1,0 +1,307 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8" />
+  <title>AI Essay Helper</title>
+  <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
+  <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
+  <script defer src="https://www.gstatic.com/firebasejs/10.12.2/firebase-database-compat.js"></script>
+  <script defer src="https://cdn.jsdelivr.net/npm/file-saver@2.0.5/dist/FileSaver.min.js"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/docx/7.7.0/docx.umd.min.js"></script>
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <style>
+    .hidden { display: none !important; }
+    body {
+      font-family: sans-serif; margin: 0; background: #f0f4f8;
+      display: flex; flex-direction: column; align-items: center;
+      padding: 20px; min-height: 100vh;
+    }
+    h2,h3 { text-align: center; }
+    .container {
+      display: flex; gap: 20px;
+      width: 100%; max-width: 1200px;
+    }
+    .column {
+      flex: 1; display: flex; flex-direction: column; gap: 10px;
+    }
+    textarea {
+      min-height: 200px; resize: both;
+      padding: 12px; font-size: 16px;
+      border: 1px solid #ccc; border-radius: 8px;
+      font-family: inherit;
+    }
+    button {
+      padding: 10px 16px; border: none;
+      background: #00796b; color: white;
+      font-weight: bold; border-radius: 8px;
+      cursor: pointer; transition: background 0.3s ease;
+    }
+    button:hover { background: #00695c; }
+    #popup {
+      position: absolute; background: white;
+      padding: 12px; border: 1px solid #ccc;
+      border-radius: 6px; display: none;
+      flex-direction: column; gap: 6px; z-index: 10;
+      box-shadow: 0 0 10px rgba(0,0,0,0.2);
+    }
+    #savedEssaysList {
+      list-style: none; padding: 10px; margin: 0;
+      border: 1px solid #ccc; border-radius: 8px;
+      max-height: 400px; overflow-y: auto;
+      font-size: 14px;
+    }
+    #savedEssaysList li:hover { background: #e0f2f1; }
+    #userEmail { font-weight: bold; }
+  </style>
+</head>
+<body>
+
+<h2>AI Essay Helper</h2>
+
+<!-- AUTH UI -->
+<div id="auth">
+  <button onclick="signInWithGoogle()">Login with Google</button>
+</div>
+
+<!-- APP UI -->
+<div id="app" class="hidden" style="width:100%; max-width:1200px;">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+    <div><strong>User:</strong> <span id="userEmail"></span></div>
+    <button onclick="logout()">Logout</button>
+  </div>
+
+  <div class="container">
+    <!-- Saved Essays -->
+    <div class="column" style="flex:0.4;">
+      <h3>Your Saved Essays</h3>
+      <ul id="savedEssaysList"></ul>
+      <button onclick="deleteCurrentEssay()" style="background:#b00020; margin-top:10px;">
+        Delete Current Essay
+      </button>
+    </div>
+
+    <!-- Editor -->
+    <div class="column" style="flex:0.6;">
+      <label><strong>Essay Main Idea</strong></label>
+      <textarea id="essayPrompt" placeholder="Type your main idea here..."></textarea>
+
+      <label><strong>Jot Notes (• auto-dotted)</strong></label>
+      <textarea id="jotNotes" placeholder="Start jot notes..."></textarea>
+
+      <button onclick="generateEssay()">Complete Essay With AI</button>
+
+      <label><strong>Your Essay</strong></label>
+      <textarea id="aiResponse" placeholder="Essay will appear here..." style="min-height:200px;"></textarea>
+      <button onclick="togglePopup(event)">Export Essay</button>
+      <div id="popup">
+        <button onclick="downloadText()">Export as .txt</button>
+        <button onclick="exportAsPDF()">Export as .pdf</button>
+        <button onclick="exportAsDocx()">Export as .docx</button>
+        <button onclick="copyEssay()">Copy to Clipboard</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ── FIREBASE CONFIG ───────────────────────────────────
+  const firebaseConfig = {
+    apiKey:    "AIzaSyDT_Q9bmbiynMtsHp8ZIeU_gSGdRum-qH4",
+    authDomain:"essayhelper-70afb.firebaseapp.com",
+    databaseURL:"https://essayhelper-70afb-default-rtdb.firebaseio.com",
+    projectId: "essayhelper-70afb",
+    storageBucket:"essayhelper-70afb.appspot.com",
+    messagingSenderId:"471398611476",
+    appId:     "1:471398611476:web:a5c0acb2a3ce518039c501"
+  };
+  firebase.initializeApp(firebaseConfig);
+  const auth = firebase.auth();
+  const db   = firebase.database();
+
+  let currentUser = null;
+  let currentEssayId = null;
+
+  // ── AUTH ──────────────────────────────────────────────
+  function signInWithGoogle() {
+    const provider = new firebase.auth.GoogleAuthProvider();
+    auth.signInWithPopup(provider)
+      .then(res => {
+        console.log("Signed in user:", res.user);
+        currentUser = res.user;
+        document.getElementById("auth").classList.add("hidden");
+        document.getElementById("app").classList.remove("hidden");
+        document.getElementById("userEmail").textContent = currentUser.email;
+        loadSavedEssays();
+      })
+      .catch(err => console.error("Sign-in error:", err));
+  }
+
+  function logout() {
+    auth.signOut().then(() => {
+      currentUser = currentEssayId = null;
+      document.getElementById("auth").classList.remove("hidden");
+      document.getElementById("app").classList.add("hidden");
+      clearInputs();
+      document.getElementById("savedEssaysList").innerHTML = "";
+      document.getElementById("userEmail").textContent = "";
+    });
+  }
+
+  // ── CRUD ESSAYS ───────────────────────────────────────
+  function clearInputs() {
+    ["essayPrompt","jotNotes","aiResponse"].forEach(id => 
+      document.getElementById(id).value = ""
+    );
+  }
+
+  function saveEssay() {
+    if (!currentUser) return;
+    const data = {
+      mainIdea:  document.getElementById("essayPrompt").value,
+      jotNotes:  document.getElementById("jotNotes").value,
+      essay:     document.getElementById("aiResponse").value,
+      updatedAt: Date.now()
+    };
+    if (!currentEssayId) {
+      currentEssayId = db.ref(`essays/${currentUser.uid}`).push().key;
+    }
+    db.ref(`essays/${currentUser.uid}/${currentEssayId}`)
+      .set(data).then(loadSavedEssays);
+  }
+
+  function loadSavedEssays() {
+    if (!currentUser) return;
+    db.ref(`essays/${currentUser.uid}`).once("value").then(snap => {
+      const essays = snap.val()||{};
+      const list = document.getElementById("savedEssaysList");
+      list.innerHTML = "";
+      Object.entries(essays).forEach(([key,e])=>{
+        const li = document.createElement("li");
+        li.textContent = (e.mainIdea||"(No Title)").slice(0,50);
+        li.title = new Date(e.updatedAt).toLocaleString();
+        li.style.cssText = "cursor:pointer;padding:8px;border-bottom:1px solid #eee;";
+        if(key===currentEssayId) li.style.background="#b2dfdb";
+        li.onclick = ()=>loadEssay(key);
+        list.appendChild(li);
+      });
+    });
+  }
+
+  function loadEssay(key) {
+    if (!currentUser) return;
+    db.ref(`essays/${currentUser.uid}/${key}`).once("value").then(snap=>{
+      const e = snap.val();
+      if(!e) return;
+      currentEssayId = key;
+      document.getElementById("essayPrompt").value = e.mainIdea;
+      document.getElementById("jotNotes").value     = e.jotNotes;
+      document.getElementById("aiResponse").value  = e.essay;
+      loadSavedEssays();
+    });
+  }
+
+  function deleteCurrentEssay() {
+    if (!currentUser || !currentEssayId) return alert("No essay selected.");
+    if (!confirm("Delete this essay?")) return;
+    db.ref(`essays/${currentUser.uid}/${currentEssayId}`)
+      .remove().then(()=>{
+        clearInputs();
+        currentEssayId = null;
+        loadSavedEssays();
+      });
+  }
+
+  // ── AUTO-DOT JOT NOTES & SAVE ON INPUT ────────────────
+  document.getElementById("jotNotes")
+    .addEventListener("input",e=>{
+      const lines = e.target.value.split("\n").map(l=>l.trim()?`• ${l.replace(/^•?\s*/,"")}`:"");
+      const pos = e.target.selectionStart;
+      e.target.value = lines.join("\n");
+      e.target.selectionStart = e.target.selectionEnd = pos;
+      saveEssay();
+    });
+  ["essayPrompt","aiResponse"]
+    .forEach(id=>document.getElementById(id)
+      .addEventListener("input",saveEssay)
+    );
+
+  // ── AI GENERATION ─────────────────────────────────────
+  async function generateEssay() {
+  const prompt = document.getElementById("essayPrompt").value.trim();
+  const notes = document.getElementById("jotNotes").value.trim();
+  const out = document.getElementById("aiResponse");
+  if (!prompt) return alert("Enter the Essay Main Idea.");
+  out.style.display = "block";
+  out.value = "Writing…";
+
+  try {
+    const res = await fetch("/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ prompt, notes })
+    });
+
+    const data = await res.json();
+    out.value = data.response || "Error generating.";
+    saveEssay();
+
+  } catch (err) {
+    out.value = "";
+    alert("AI error: " + err.message);
+  }
+}
+
+
+  // ── EXPORT ────────────────────────────────────────────
+  function togglePopup(e) {
+    const pop = document.getElementById("popup");
+    pop.style.display = pop.style.display==="flex"?"none":"flex";
+    pop.style.left = e.clientX+"px"; pop.style.top = e.clientY+"px";
+  }
+  function downloadText() {
+    saveAs(new Blob([document.getElementById("aiResponse").value],{type:"text/plain"}),"essay.txt");
+  }
+  async function exportAsPDF() {
+    const { jsPDF } = window.jspdf;
+    const doc = new jsPDF();
+    const t = document.getElementById("aiResponse").value;
+    doc.text(doc.splitTextToSize(t,180),10,20);
+    doc.save("essay.pdf");
+  }
+  async function exportAsDocx() {
+    const t = document.getElementById("aiResponse").value;
+    const doc = new docx.Document({sections:[{children:[new docx.Paragraph(t)]}]});
+    const blob = await docx.Packer.toBlob(doc);
+    saveAs(blob,"essay.docx");
+  }
+  function copyEssay() {
+    const ta = document.getElementById("aiResponse");
+    ta.select(); document.execCommand("copy");
+    alert("Copied!");
+  }
+  window.addEventListener("click",e=>{
+    if(!e.target.closest("#popup") && e.target.innerText!=="Export Essay"){
+      document.getElementById("popup").style.display="none";
+    }
+  });
+
+  // ── AUTO-LOGIN ON RELOAD ──────────────────────────────
+  auth.onAuthStateChanged(u=>{
+    if(u){
+      currentUser = u;
+      document.getElementById("auth").classList.add("hidden");
+      document.getElementById("app").classList.remove("hidden");
+      document.getElementById("userEmail").textContent = u.email;
+      loadSavedEssays();
+    } else {
+      currentUser = currentEssayId = null;
+      document.getElementById("auth").classList.remove("hidden");
+      document.getElementById("app").classList.add("hidden");
+      clearInputs();
+      document.getElementById("savedEssaysList").innerHTML="";
+      document.getElementById("userEmail").textContent="";
+    }
+  });
+</script>
+</body>
+</html>
